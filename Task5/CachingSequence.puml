@@ -1,0 +1,57 @@
+@startuml MES_Caching_Sequence
+
+actor  "Оператор" as operator
+
+
+box "Система"
+participant "CRM API" as crm
+participant  "Message Queue" as queue
+participant "MES API" as mes
+end box
+
+box "Хранилища"
+database  "Redis" as redis
+database  "MES DB" as db
+end box
+
+
+== Создание нового заказа ==
+crm -> queue : OrderData (Create)
+queue -> mes : OrderData Received
+mes -> db : INSERT OrderData
+mes -> redis : SET order:{id} (Cache-Aside)
+redis --> mes : OK
+mes --> queue : Ack
+
+== Получение списка заказов ==
+operator -> mes : GET /orders
+mes -> redis : GET orders:list
+alt Данные в кеше
+    redis --> mes : Return cached orders
+else Нет данных
+    mes -> db : SELECT * FROM orders
+    db --> mes : Orders data
+    mes -> redis : SET orders:list (Cache-Aside)
+    redis --> mes : OK
+end
+mes --> operator : Return orders
+
+== Обновление статуса ==
+alt Обновление через CRM
+    crm -> mes : PUT /orders/{id}/status
+else Обновление оператором
+    operator -> mes : PUT /orders/{id}/status
+end
+
+mes -> db : "UPDATE status (Write-Through)"
+db --> mes : OK
+mes -> redis : "SET order:{id}:status (Write-Through)"
+redis --> mes : OK
+
+alt Обновление через CRM
+    mes --> crm : 200 OK
+else Обновление оператором
+    mes --> operator : 200 OK
+end
+
+@enduml
